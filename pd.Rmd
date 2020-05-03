@@ -1,0 +1,177 @@
+---
+title: "Probability Of Default"
+author: "Krishna"
+date: "4/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading the Dataset
+
+```{r}
+loan_training_data <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/train_v3.csv", data.table = F, colClasses = c("character"))
+```
+
+## Recoding All Variables as Numeric
+
+```{r}
+loan_training_data <- loan_training_data %>% mutate_all(as.numeric)
+```
+
+## Recoding Target Variable
+
+```{r}
+target <- loan_training_data %>%
+  select(loss) %>%
+  mutate_at(c("loss"), ~ifelse(. > 0, 1, 0)) %>%
+  mutate_at(c("loss"), as.factor)
+
+summary(target)
+```
+
+## Separating Predictors Variable from Target Variable
+
+```{r}
+loan_data <- loan_training_data %>% select(-c("loss", "V1", "id"))
+```
+
+## Removing Near Zero Variance Variables
+
+```{r}
+check_ZeroVar <- nearZeroVar(loan_data, allowParallel = T, foreach = T)
+data <- loan_data[, -check_ZeroVar]
+```
+
+## Imputing NA values using Median
+
+```{r}
+model_imputation <- preProcess(data, method = "medianImpute")
+new_data <- predict(model_imputation, data)
+
+anyNA(new_data)
+```
+
+## Center and Scale The Data
+
+```{r}
+model <- preProcess(new_data, method = c("center", "scale"))
+new_data2 <- predict(model, new_data)
+```
+
+## Spliting into Training and Test
+
+```{r}
+train_data <- cbind(new_data2, target)
+
+training <- createDataPartition(
+  train_data$loss,
+  p = 0.8,
+  list = F,
+  times = 1
+)
+
+train_data1 <- train_data[training,]
+test_data1 <- train_data[-training,]
+
+training_x <- train_data1 %>% dplyr::select(-c("loss")) %>% data.matrix()
+testing_x <- test_data1  %>% dplyr::select(-c("loss")) %>% data.matrix()
+
+training_y <- train_data1 %>% dplyr::select(c("loss")) %>% use_series("loss")
+testing_y <- test_data1 %>% dplyr::select(c("loss")) %>% use_series("loss")
+```
+
+## Training glmnet with Cross Validation
+
+```{r}
+cross_validation <- cv.glmnet(
+  training_x, training_y,
+  type.measure = "auc",
+  family = "binomial",
+  alpha = 0.8,
+  parallel = T
+)
+
+plot(cross_validation)
+
+max(cross_validation$cvm)
+```
+
+## Evaluating PD Model on Validation Set
+
+```{r}
+pred <- predict(cross_validation, newx = testing_x, s = "lambda.min") %>% as.vector()
+predict <- predict(cross_validation, newx = testing_x, s = "lambda.min", type = "class") %>%
+  as.vector() %>%
+  factor(levels = c("0", "1"))
+```
+
+## Loading the Datasets
+
+```{r}
+test_scenario3 <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/test_scenario3.csv", data.table = F, colClasses = c("character"))
+test_scenario1_2 <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/test_scenario1_2.csv", data.table = F, colClasses = c("character"))
+```
+
+## Getting Test Predictors
+
+```{r}
+loan_test_data <- test_scenario1_2 %>% select(-c("requested_loan", "V1", "X", "id"))
+```
+
+## Recoding Variables as Numeric
+
+```{r}
+loan_test_data <- loan_test_data %>% mutate_all(as.numeric)
+```
+
+## Removing Near Zero Variance Variables
+
+```{r}
+test_ZeroVar <- nearZeroVar(loan_test_data, allowParallel = T, foreach = T)
+test_data <- loan_test_data[, -test_ZeroVar]
+```
+
+## Imputing NA using Median
+
+```{r}
+test_imputation <- preProcess(test_data, method = "medianImpute")
+new_test_data <- predict(test_imputation, test_data)
+
+anyNA(new_test_data)
+```
+
+## Center and Scale The Data
+
+```{r}
+test_model <- preProcess(new_test_data, method = c("center", "scale"))
+new_test_data1 <- predict(test_model, new_test_data)
+```
+
+## Predicting Probability of Default
+
+```{r}
+testing_data <- new_test_data1 %>%
+  select(colnames(training_x)) %>%
+  data.matrix()
+
+testing_data
+```
+
+```{r}
+pd <- predict(
+  cross_validation,
+  newx = testing_data,
+  s = "lambda.min",
+  type = "response"
+  ) %>%
+  set_colnames("PD")
+
+summary(pd)
+```
+
+```{r}
+write.csv(pd, file = "C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/PD.csv", row.names = F)
+```

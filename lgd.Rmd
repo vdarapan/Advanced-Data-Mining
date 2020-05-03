@@ -1,0 +1,291 @@
+---
+title: "Loss Given Default"
+author: "Krishna"
+date: "4/22/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Loading libraries
+```{r}
+library(magrittr)
+library(caret)
+library(dplyr)
+library(data.table)
+library(doParallel)
+library(ggplot2)
+library(glmnet)
+library(randomForest)
+```
+
+
+```{r}
+set.seed(159)
+```
+
+## Loading the Dataset
+
+```{r}
+loan_training_data <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/train_v3.csv", data.table = F, colClasses = c("character"))
+```
+
+
+## Recoding Variables as Numeric
+
+```{r}
+loan_training_data <- loan_training_data %>% mutate_all(as.numeric)
+```
+
+## Keeping Rows Where `loss` > 0
+
+```{r}
+loss_data <- loan_training_data %>% filter(loss > 0)
+
+head(loss_data)
+```
+
+```{r}
+summary(loss_data$loss)
+```
+
+## Removing Near Zero Variance Variables
+
+```{r}
+check_ZeroVar <- nearZeroVar(loss_data, allowParallel = T, foreach = T)
+new_loss_data <- loss_data[, -check_ZeroVar]
+```
+
+## Imputing NA using Median
+
+```{r}
+model_imputation <- preProcess(new_loss_data, method = "medianImpute")
+new_data <- predict(model_imputation, new_loss_data)
+
+anyNA(new_data)
+```
+
+## Seperating Predictor Variables from Target Variable
+
+```{r}
+predictor_data1 <- new_data %>% dplyr::select(-c("V1", "id", "loss"))
+loss_data1 <- new_data %>% dplyr::select(loss)
+```
+
+## Computing Correlation Matrix
+
+```{r}
+correlation <- cor(predictor_data1, loss_data1)
+
+summary(correlation)
+```
+
+## Sort The Variables by their Absolute Correlation Values
+
+```{r}
+correlation_data <- as.data.frame(correlation) %>%
+  transmute(
+    predictors = rownames(correlation),
+    corr = loss,
+    abs_corr = abs(loss)
+  )
+
+rownames(correlation_data) <- rownames(correlation)
+
+head(correlation_data)
+```
+
+```{r}
+new_correlation_data <- correlation_data %>%
+  arrange(desc(abs_corr)) %>%
+  head(600)
+
+top_correlation_data <- predictor_data1 %>% dplyr::select(new_correlation_data$predictors)
+
+
+head(top_correlation_data)
+```
+
+## Center and Scale The Data
+
+```{r}
+model <- preProcess(top_correlation_data, method = c("center", "scale"))
+
+predicting_model <- predict(model, top_correlation_data)
+```
+
+## Building LGD Model
+
+## Spliting into Training and Test
+
+```{r}
+train_data <- cbind(predicting_model, loss_data1)
+
+training <- createDataPartition(
+  train_data$loss,
+  p = 0.8,
+  list = F,
+  times = 1
+)
+
+final_training <- train_data[training,]
+final_testing <- train_data[-training,]
+
+training_x <- final_training %>% dplyr::select(-c("loss"))
+testing_x <- final_testing  %>% dplyr::select(-c("loss"))
+
+training_y <- final_training %>% dplyr::select(c("loss")) %>% use_series("loss") %>% as.numeric()
+testing_y <- final_testing %>% dplyr::select(c("loss")) %>% use_series("loss") %>% as.numeric()
+```
+
+## Cross Validation
+
+```{r}
+cross_validation <- trainControl(
+  method = "cv",
+  number = 10,
+  allowParallel = T
+)
+
+tune_grid <- expand.grid(alpha = c(1, 0.8), lambda = seq(0, 1, by = 0.01))
+```
+
+## Training glmnet model
+
+```{r}
+glmnet_model <- train(
+  x = training_x,
+  y = training_y,
+  method = "glmnet",
+  metric = "Rsquared",
+  tuneGrid = tune_grid,
+  trControl = cross_validation
+)
+
+glmnet_model$results %>%
+  select(alpha, lambda, Rsquared, MAE, RMSE) %>%
+  right_join(glmnet_model$bestTune)
+
+plot(glmnet_model)
+```
+
+```{r}
+glmnet <- train(
+  x = training_x,
+  y = training_y,
+  method = "glmnet",
+  metric = "MAE",
+  tuneGrid = tune_grid,
+  trControl = cross_validation
+)
+
+glmnet$results %>%
+  select(alpha, lambda, Rsquared, MAE, RMSE) %>%
+  right_join(glmnet$bestTune)
+
+plot(glmnet)
+```
+
+## Choosing the Model based on Rsquared Metric
+
+```{r}
+matrix <- coef(glmnet_model$finalModel, s = glmnet_model$bestTune$lambda)
+
+rsqr <- data.frame(
+  name = matrix@Dimnames[[1]][matrix@i + 1],
+  coefficient = matrix@x
+  ) %>%
+  filter(name !="(Intercept)") %>%
+  arrange(-abs(coefficient)) %>%
+  use_series("name") %>%
+  as.character()
+
+rsqr
+```
+
+## Separating Good Predictor Variables from the Noise
+
+```{r}
+predictors <- predicting_model %>% dplyr::select(rsqr)
+
+head(predictors)
+```
+
+```{r}
+train_data2 <- cbind(predictors, loss_data1)
+```
+
+## Training The GLM Model using Good Predictors obtained from Cross Validation `glmnet`
+
+```{r}
+model_glm <- glm(loss ~ ., family = gaussian, data = train_data2)
+
+r_square <- cor(loss_data1, predict(model_glm))^2 %>% set_rownames("Rsquared")
+
+r_square
+```
+
+
+## Loading the Test Datasets
+
+```{r}
+test_scenario1_2 <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/test_scenario1_2.csv", data.table = F, colClasses = c("character"))
+```
+
+## Getting The Test Predictors
+
+```{r}
+testing_data <- test_scenario1_2 %>% select(-c("requested_loan", "V1", "X", "id"))
+```
+
+## Recoding The Variables as Numeric
+
+```{r}
+testing_data <- testing_data %>% mutate_all(as.numeric)
+```
+
+## Imputing NA using Median
+
+```{r}
+test_imputation <- preProcess(testing_data, method = "medianImpute")
+loss_data <- predict(test_imputation, testing_data)
+
+anyNA(loss_data)
+```
+
+## Center and Scale The Data
+
+```{r}
+test_model <- preProcess(loss_data, method = c("center", "scale"))
+new_loss_data <- predict(test_model, loss_data)
+```
+
+## Predicting Loss Given Default
+
+```{r}
+testing_data <- new_loss_data %>%
+  select(colnames(predictors))
+
+head(testing_data)
+```
+
+```{r, message=F}
+lgd <- predict(model_glm, testing_data)
+```
+
+```{r}
+summary(lgd)
+```
+
+```{r}
+ggplot(as.data.frame(lgd), aes(x = lgd)) +
+  geom_histogram(bins = 20) +
+  xlab("Loss Given Default")
+```
+
+```{r}
+write.csv(lgd, file = "C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/LGD.csv", row.names = F)
+```

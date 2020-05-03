@@ -1,0 +1,212 @@
+---
+title: "Evaluation"
+author: "Krishna"
+date: "4/22/2020"
+output: html_document
+---
+
+```{r}
+library(magrittr)
+library(dplyr)
+library(data.table) # Faster reading speeds for csv files (fread)
+```
+
+## Loading the Test Datasets
+
+```{r}
+test_scenario3 <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/test_scenario3.csv", data.table = F, colClasses = c("character"))
+test_scenario1_2 <- fread("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/test_scenario1_2.csv", data.table = F, colClasses = c("character"))
+```
+
+## Getting Columns Specific to Scenario 1 & 2
+
+```{r}
+requested_loan_1_2 <- test_scenario1_2 %>% select(requested_loan)
+```
+
+## Getting Columns Specific to Scenario 3
+
+```{r}
+requested_loan_3 <- test_scenario3 %>% select(requested_loan)
+prop_int_rate <- test_scenario3 %>% select(Proposed_Intrest_Rate)
+```
+
+## Recoding The Variables as Numeric
+
+```{r}
+requested_loan_1_2 <- requested_loan_1_2 %>% mutate_all(as.numeric)
+requested_loan_3 <- requested_loan_3 %>% mutate_all(as.numeric)
+prop_int_rate <- prop_int_rate %>% mutate_all(as.numeric)
+```
+
+## Loading PD and LGD of Customers in Test Set
+
+```{r}
+LGD <- read.csv("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/LGD.csv")
+PD <- read.csv("C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/PD.csv")
+```
+
+
+## Evaluating Customers in Scenario 1
+
+CAPITAL <- $1.4B
+
+```{r}
+sc_1 <- test_scenario1_2 %>%
+  select(id) %>%
+  bind_cols(requested_loan_1_2, PD, LGD) %>%
+  rename(LGD = x) %>%
+  mutate(
+    Oppurtunity = requested_loan * 0.0432 * 5 * (1 - PD),
+    Risk = requested_loan * PD *  LGD
+  )
+
+summary(sc_1)
+```
+
+## Total Requested Loan where Oppurtunity >= Risk in Scenario 1
+
+```{r}
+sc_1 %>%
+  mutate(loan_approval = ifelse(Oppurtunity >= Risk, 1, 0)) %>%
+  mutate_at(c("loan_approval"), as.factor) %>%
+  filter(loan_approval == 1) %>%
+  select(requested_loan) %>%
+  transmute(total_requested_loan = format(sum(.), big.mark = ",", scientific = F)) %>%
+  head(1)
+```
+
+## Final Descision on Customer Loan Approval in Scenario 1
+
+```{r}
+sc_1 %>%
+  mutate(loan_approval = ifelse(Oppurtunity >= Risk, 1, 0)) %>%
+  select(loan_approval) %>%
+  write.csv(file = "C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/G7_S1.csv", row.names = F)
+```
+
+## Evaluating Customers in Scenario 2
+
+Budget <- $450M
+
+```{r}
+sc_2 <- test_scenario1_2 %>%
+  select(id) %>%
+  bind_cols(requested_loan_1_2, PD, LGD) %>%
+  rename(LGD = x) %>%
+  mutate(
+    Oppurtunity = requested_loan * 0.0432 * 5 * (1 - PD),
+    Risk = requested_loan * PD *  LGD
+  )
+```
+
+## Final Descision on Customer Loan Approval in Scenario 2
+
+```{r}
+sc_2 %>%
+  mutate(loan_approval = ifelse(Oppurtunity >= Risk, 1, 0)) %>%
+  select(loan_approval) %>%
+  write.csv(file = "C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/G7_S2.csv", row.names = F)
+```
+
+
+
+## Evaluating Customers in Scenario 3
+
+Budget <- $1.4B
+
+```{r}
+sc_3 <- test_scenario3 %>%
+  select(id) %>%
+  bind_cols(requested_loan_1_2, prop_int_rate, PD, LGD) %>%
+  rename(LGD = x) %>%
+  mutate(
+    Oppurtunity = requested_loan * Proposed_Intrest_Rate * 5 * (1 - PD),
+    Risk = requested_loan * PD *  LGD
+  )
+
+head(sc_3)
+```
+
+```{r}
+sc_3 %>% select(Proposed_Intrest_Rate) %>% summary()
+```
+
+## Total Requested Loan where Oppurtunity >= Risk in Scenario 3
+
+```{r}
+sc_3 %>%
+  mutate(loan_approval = ifelse(Oppurtunity >= Risk, 1, 0)) %>%
+  mutate_at(c("loan_approval"), as.factor) %>%
+  filter(loan_approval == 1) %>%
+  select(requested_loan) %>%
+  transmute(total_requested_loan = format(sum(.), big.mark = ",", scientific = F)) %>%
+  head(1)
+```
+
+## Total Sum of Oppurtunity in Scenario 3
+
+```{r}
+sc_3 %>%
+  mutate(loan_approval = ifelse(Oppurtunity >= Risk, 1, 0)) %>%
+  mutate_at(c("loan_approval"), as.factor) %>%
+  filter(loan_approval == 1) %>%
+  select(Oppurtunity) %>%
+  transmute(total_oppurtunity = format(sum(.), big.mark = ",", scientific = F)) %>%
+  head(1)
+```
+
+## PD at 0.5 in Scenario 3
+
+```{r}
+sc_3 %>%
+  mutate(default = ifelse(PD >= 0.5, 1, 0)) %>%
+  mutate_at(c("default"), as.factor) %>%
+  select(default) %>%
+  summary()
+```
+
+```{r}
+sc_3 %>%
+  mutate(default = ifelse(PD >= 0.5, 1, 0)) %>%
+  mutate_at(c("default"), as.factor) %>%
+  filter(default == 0) %>%
+  select(Oppurtunity) %>%
+  transmute(total_oppurtunity = format(sum(.), big.mark = ",", scientific = F)) %>%
+  head(1)
+```
+
+## PD at 0.1 in Scenario 3
+
+```{r}
+sc_3 %>%
+  mutate(default = ifelse(PD >= 0.1, 1, 0)) %>%
+  mutate_at(c("default"), as.factor) %>%
+  select(default) %>%
+  summary()
+```
+
+```{r}
+sc_3 %>%
+  mutate(default = ifelse(PD >= 0.1, 1, 0)) %>%
+  mutate_at(c("default"), as.factor) %>%
+  filter(default == 0) %>%
+  select(Oppurtunity) %>%
+  transmute(total_oppurtunity = format(sum(.), big.mark = ",", scientific = F)) %>%
+  head(1)
+```
+
+## Final Descision on Customer Loan Approval in Scenario 3
+
+```{r}
+sc_3 %>%
+  mutate(default = ifelse(PD >= 0.1, 1, 0)) %>%
+  mutate(loan_approval = ifelse(default == 0, 1, 0)) %>%
+  select(loan_approval) %>%
+  write.csv(file = "C:/Users/krish/Desktop/Subjects/Spr-20/Adv Data Mining/Group Project/G7_S3.csv", row.names = F)
+```
+
+
+
+
+
